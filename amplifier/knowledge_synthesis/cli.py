@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import click
@@ -27,6 +28,89 @@ logger = logging.getLogger(__name__)
 def cli():
     """Knowledge synthesis from content files."""
     pass
+
+
+@cli.command()
+@click.option(
+    "--mode",
+    type=click.Choice(["suggest", "auto"], case_sensitive=False),
+    default=None,
+    help="Codex execution mode (default: suggest).",
+)
+@click.option("--dry-run", is_flag=True, help="Print the Codex command without executing it.")
+@click.option(
+    "--sandbox",
+    type=click.Path(file_okay=False, resolve_path=True, path_type=Path),
+    help="Sandbox directory passed to Codex.",
+)
+@click.option("--approve", is_flag=True, help="Skip the confirmation prompt and run immediately.")
+@click.option("--codex-bin", type=str, help="Override the Codex binary path or command name.")
+@click.option(
+    "--context",
+    type=click.Path(resolve_path=True, path_type=Path, exists=False),
+    help="Optional context path forwarded to Codex.",
+)
+@click.option("--timeout", type=int, help="Timeout in seconds for Codex execution.")
+def codex_run(
+    mode: str | None,
+    dry_run: bool,
+    sandbox: Path | None,
+    approve: bool,
+    codex_bin: str | None,
+    context: Path | None,
+    timeout: int | None,
+):
+    """Run the Codex CLI with Amplifier safety defaults."""
+
+    try:
+        from amplifier.codex_cli import (
+            CodexCLI,
+            CodexExecutionCancelled,
+            CodexExecutionError,
+            CodexSandboxError,
+            CodexUnavailableError,
+        )
+    except ImportError as exc:  # pragma: no cover - defensive guard
+        raise click.ClickException(f"Unable to load Codex helpers: {exc}") from exc
+
+    codex_cli = CodexCLI(codex_bin=codex_bin)
+
+    context_value = str(context) if context else None
+
+    try:
+        result = codex_cli.execute(
+            mode=mode.lower() if mode else None,
+            context=context_value,
+            sandbox=sandbox,
+            dry_run=dry_run,
+            approve=approve,
+            timeout=timeout,
+        )
+    except CodexExecutionCancelled:
+        click.echo("Codex execution cancelled.")
+        return
+    except CodexSandboxError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except CodexUnavailableError as exc:
+        raise click.ClickException(
+            f"Codex is not available: {exc}. Install Codex or provide --codex-bin."
+        ) from exc
+    except CodexExecutionError as exc:
+        details = exc.stderr.strip() or exc.stdout.strip()
+        message = exc.message if hasattr(exc, "message") else str(exc)
+        if details:
+            message = f"{message}\n{details}"
+        raise click.ClickException(message) from exc
+
+    if result.dry_run:
+        click.echo("Dry run: Codex command not executed.")
+        click.echo(result.command_display())
+        return
+
+    if result.stdout.strip():
+        click.echo(result.stdout.rstrip())
+    if result.stderr.strip():
+        click.echo(result.stderr.rstrip(), err=True)
 
 
 @cli.command()
